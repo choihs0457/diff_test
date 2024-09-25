@@ -4,33 +4,33 @@ pragma solidity 0.8.25;
 import { Ownable2StepUpgradeable } from "@openzeppelin/contracts-upgradeable/access/Ownable2StepUpgradeable.sol";
 import { IERC20Upgradeable } from "@openzeppelin/contracts-upgradeable/token/ERC20/IERC20Upgradeable.sol";
 import { SafeERC20Upgradeable } from "@openzeppelin/contracts-upgradeable/token/ERC20/utils/SafeERC20Upgradeable.sol";
-import { AccessControlledV8 } from "@venusprotocol/governance-contracts/contracts/Governance/AccessControlledV8.sol";
-import { IProtocolShareReserve } from "@venusprotocol/protocol-reserve/contracts/Interfaces/IProtocolShareReserve.sol";
+import { AccessControlledV8 } from "./ACM/AccessControlledV8.sol";
+import { IProtocolShareReserve } from "./Reserve/IProtocolShareReserve.sol";
 
-import { VTokenInterface } from "./VTokenInterfaces.sol";
+import {LtTokenInterface} from "./LtTokenInterfaces.sol";
 import { ComptrollerInterface, ComptrollerViewInterface } from "./ComptrollerInterface.sol";
 import { TokenErrorReporter } from "./ErrorReporter.sol";
 import { InterestRateModel } from "./InterestRateModel.sol";
 import { ExponentialNoError } from "./ExponentialNoError.sol";
-import { TimeManagerV8 } from "@venusprotocol/solidity-utilities/contracts/TimeManagerV8.sol";
+import { TimeManagerV8 } from "./lib/TimeManagerV8.sol";
 import { ensureNonzeroAddress } from "./lib/validators.sol";
 
 /**
- * @title VToken
+ * @title LtToken.sol
  * @author Venus
- * @notice Each asset that is supported by a pool is integrated through an instance of the `VToken` contract. As outlined in the protocol overview,
- * each isolated pool creates its own `vToken` corresponding to an asset. Within a given pool, each included `vToken` is referred to as a market of
+ * @notice Each asset that is supported by a pool is integrated through an instance of the `LtToken.sol` contract. As outlined in the protocol overview,
+ * each isolated pool creates its own `ltToken` corresponding to an asset. Within a given pool, each included `ltToken` is referred to as a market of
  * the pool. The main actions a user regularly interacts with in a market are:
 
-- mint/redeem of vTokens;
-- transfer of vTokens;
+- mint/redeem of ltTokens;
+- transfer of ltTokens;
 - borrow/repay a loan on an underlying asset;
 - liquidate a borrow or liquidate/heal an account.
 
- * A user supplies the underlying asset to a pool by minting `vTokens`, where the corresponding `vToken` amount is determined by the `exchangeRate`.
+ * A user supplies the underlying asset to a pool by minting `ltTokens`, where the corresponding `ltToken` amount is determined by the `exchangeRate`.
  * The `exchangeRate` will change over time, dependent on a number of factors, some of which accrue interest. Additionally, once users have minted
- * `vToken` in a pool, they can borrow any asset in the isolated pool by using their `vToken` as collateral. In order to borrow an asset or use a `vToken`
- * as collateral, the user must be entered into each corresponding market (else, the `vToken` will not be considered collateral for a borrow). Note that
+ * `ltToken` in a pool, they can borrow any asset in the isolated pool by using their `ltToken` as collateral. In order to borrow an asset or use a `ltToken`
+ * as collateral, the user must be entered into each corresponding market (else, the `ltToken` will not be considered collateral for a borrow). Note that
  * a user may borrow up to a portion of their collateral determined by the market’s collateral factor. However, if their borrowed amount exceeds an amount
  * calculated using the market’s corresponding liquidation threshold, the borrow is eligible for liquidation. When a user repays a borrow, they must also
  * pay off interest accrued on the borrow.
@@ -38,13 +38,13 @@ import { ensureNonzeroAddress } from "./lib/validators.sol";
  * The Venus protocol includes unique mechanisms for healing an account and liquidating an account. These actions are performed in the `Comptroller`
  * and consider all borrows and collateral for which a given account is entered within a market. These functions may only be called on an account with a
  * total collateral amount that is no larger than a universal `minLiquidatableCollateral` value, which is used for all markets within a `Comptroller`.
- * Both functions settle all of an account’s borrows, but `healAccount()` may add `badDebt` to a vToken. For more detail, see the description of
+ * Both functions settle all of an account’s borrows, but `healAccount()` may add `badDebt` to a ltToken. For more detail, see the description of
  * `healAccount()` and `liquidateAccount()` in the `Comptroller` summary section below.
  */
-contract VToken is
+contract LtToken is
     Ownable2StepUpgradeable,
     AccessControlledV8,
-    VTokenInterface,
+    LtTokenInterface,
     ExponentialNoError,
     TokenErrorReporter,
     TimeManagerV8
@@ -267,7 +267,7 @@ contract VToken is
     }
 
     /**
-     * @notice Sender supplies assets into the market and receives vTokens in exchange
+     * @notice Sender supplies assets into the market and receives ltTokens in exchange
      * @dev Accrues interest whether or not the operation succeeds, unless reverted
      * @param mintAmount The amount of the underlying asset to supply
      * @return error Always NO_ERROR for compatibility with Venus core tooling
@@ -282,7 +282,7 @@ contract VToken is
     }
 
     /**
-     * @notice Sender calls on-behalf of minter. minter supplies assets into the market and receives vTokens in exchange
+     * @notice Sender calls on-behalf of minter. minter supplies assets into the market and receives ltTokens in exchange
      * @dev Accrues interest whether or not the operation succeeds, unless reverted
      * @param minter User whom the supply will be attributed to
      * @param mintAmount The amount of the underlying asset to supply
@@ -301,9 +301,9 @@ contract VToken is
     }
 
     /**
-     * @notice Sender redeems vTokens in exchange for the underlying asset
+     * @notice Sender redeems ltTokens in exchange for the underlying asset
      * @dev Accrues interest whether or not the operation succeeds, unless reverted
-     * @param redeemTokens The number of vTokens to redeem into underlying
+     * @param redeemTokens The number of ltTokens to redeem into underlying
      * @return error Always NO_ERROR for compatibility with Venus core tooling
      * @custom:event Emits Redeem and Transfer events; may emit AccrueInterest
      * @custom:error RedeemTransferOutNotPossible is thrown when the protocol has insufficient cash
@@ -321,7 +321,7 @@ contract VToken is
      *   for senders, explicitly marked as delegates of the supplier using `comptroller.updateDelegate`
      * @dev Accrues interest whether or not the operation succeeds, unless reverted
      * @param redeemer The user on behalf of whom to redeem
-     * @param redeemTokens The number of vTokens to redeem into underlying
+     * @param redeemTokens The number of ltTokens to redeem into underlying
      * @return error Always NO_ERROR for compatibility with Venus core tooling
      * @custom:error InsufficientRedeemApproval is thrown when sender is not approved by the redeemer for the given amount
      * @custom:error RedeemTransferOutNotPossible is thrown when the protocol has insufficient cash
@@ -338,9 +338,9 @@ contract VToken is
     }
 
     /**
-     * @notice Sender redeems vTokens in exchange for a specified amount of underlying asset
+     * @notice Sender redeems ltTokens in exchange for a specified amount of underlying asset
      * @dev Accrues interest whether or not the operation succeeds, unless reverted
-     * @param redeemAmount The amount of underlying to receive from redeeming vTokens
+     * @param redeemAmount The amount of underlying to receive from redeeming ltTokens
      * @return error Always NO_ERROR for compatibility with Venus core tooling
      */
     function redeemUnderlying(uint256 redeemAmount) external override nonReentrant returns (uint256) {
@@ -355,7 +355,7 @@ contract VToken is
      *   for senders, explicitly marked as delegates of the supplier using `comptroller.updateDelegate`
      * @dev Accrues interest whether or not the operation succeeds, unless reverted
      * @param redeemer, on behalf of whom to redeem
-     * @param redeemAmount The amount of underlying to receive from redeeming vTokens
+     * @param redeemAmount The amount of underlying to receive from redeeming ltTokens
      * @return error Always NO_ERROR for compatibility with Venus core tooling
      * @custom:error InsufficientRedeemApproval is thrown when sender is not approved by the redeemer for the given amount
      * @custom:event Emits Redeem and Transfer events; may emit AccrueInterest
@@ -439,13 +439,13 @@ contract VToken is
     /**
      * @notice The sender liquidates the borrowers collateral.
      *  The collateral seized is transferred to the liquidator.
-     * @param borrower The borrower of this vToken to be liquidated
+     * @param borrower The borrower of this ltToken to be liquidated
      * @param repayAmount The amount of the underlying borrowed asset to repay
-     * @param vTokenCollateral The market in which to seize collateral from the borrower
+     * @param ltTokenCollateral The market in which to seize collateral from the borrower
      * @return error Always NO_ERROR for compatibility with Venus core tooling
      * @custom:event Emits LiquidateBorrow event; may emit AccrueInterest
-     * @custom:error LiquidateAccrueCollateralInterestFailed is thrown when it is not possible to accrue interest on the collateral vToken
-     * @custom:error LiquidateCollateralFreshnessCheck is thrown when interest has not been accrued on the collateral vToken
+     * @custom:error LiquidateAccrueCollateralInterestFailed is thrown when it is not possible to accrue interest on the collateral ltToken
+     * @custom:error LiquidateCollateralFreshnessCheck is thrown when interest has not been accrued on the collateral ltToken
      * @custom:error LiquidateLiquidatorIsBorrower is thrown when trying to liquidate self
      * @custom:error LiquidateCloseAmountIsZero is thrown when repayment amount is zero
      * @custom:error LiquidateCloseAmountIsUintMax is thrown when repayment amount is UINT_MAX
@@ -454,9 +454,9 @@ contract VToken is
     function liquidateBorrow(
         address borrower,
         uint256 repayAmount,
-        VTokenInterface vTokenCollateral
+        LtTokenInterface ltTokenCollateral
     ) external override returns (uint256) {
-        _liquidateBorrow(msg.sender, borrower, repayAmount, vTokenCollateral, false);
+        _liquidateBorrow(msg.sender, borrower, repayAmount, ltTokenCollateral, false);
         return NO_ERROR;
     }
 
@@ -502,7 +502,7 @@ contract VToken is
      * @dev Gracefully return if reserves already reduced in accrueInterest
      * @param reduceAmount Amount of reduction to reserves
      * @custom:event Emits ReservesReduced event; may emit AccrueInterest
-     * @custom:error ReduceReservesCashNotAvailable is thrown when the vToken does not have sufficient cash
+     * @custom:error ReduceReservesCashNotAvailable is thrown when the ltToken does not have sufficient cash
      * @custom:error ReduceReservesCashValidation is thrown when trying to withdraw more cash than the reserves have
      * @custom:access Not restricted
      */
@@ -587,7 +587,7 @@ contract VToken is
             totalBorrowsNew = totalBorrowsNew - badDebtDelta;
             badDebt = badDebtNew;
 
-            // We treat healing as "repayment", where vToken is the payer
+            // We treat healing as "repayment", where ltToken is the payer
             emit RepayBorrow(address(this), borrower, badDebtDelta, 0, totalBorrowsNew);
             emit BadDebtIncreased(borrower, badDebtDelta, badDebtOld, badDebtNew);
         }
@@ -603,15 +603,15 @@ contract VToken is
      * @notice The extended version of liquidations, callable only by Comptroller. May skip
      *  the close factor check. The collateral seized is transferred to the liquidator.
      * @param liquidator The address repaying the borrow and seizing collateral
-     * @param borrower The borrower of this vToken to be liquidated
+     * @param borrower The borrower of this ltToken to be liquidated
      * @param repayAmount The amount of the underlying borrowed asset to repay
-     * @param vTokenCollateral The market in which to seize collateral from the borrower
+     * @param ltTokenCollateral The market in which to seize collateral from the borrower
      * @param skipLiquidityCheck If set to true, allows to liquidate up to 100% of the borrow
      *   regardless of the account liquidity
      * @custom:event Emits LiquidateBorrow event; may emit AccrueInterest
      * @custom:error ForceLiquidateBorrowUnauthorized is thrown when the request does not come from Comptroller
-     * @custom:error LiquidateAccrueCollateralInterestFailed is thrown when it is not possible to accrue interest on the collateral vToken
-     * @custom:error LiquidateCollateralFreshnessCheck is thrown when interest has not been accrued on the collateral vToken
+     * @custom:error LiquidateAccrueCollateralInterestFailed is thrown when it is not possible to accrue interest on the collateral ltToken
+     * @custom:error LiquidateCollateralFreshnessCheck is thrown when interest has not been accrued on the collateral ltToken
      * @custom:error LiquidateLiquidatorIsBorrower is thrown when trying to liquidate self
      * @custom:error LiquidateCloseAmountIsZero is thrown when repayment amount is zero
      * @custom:error LiquidateCloseAmountIsUintMax is thrown when repayment amount is UINT_MAX
@@ -621,22 +621,22 @@ contract VToken is
         address liquidator,
         address borrower,
         uint256 repayAmount,
-        VTokenInterface vTokenCollateral,
+        LtTokenInterface ltTokenCollateral,
         bool skipLiquidityCheck
     ) external override {
         if (msg.sender != address(comptroller)) {
             revert ForceLiquidateBorrowUnauthorized();
         }
-        _liquidateBorrow(liquidator, borrower, repayAmount, vTokenCollateral, skipLiquidityCheck);
+        _liquidateBorrow(liquidator, borrower, repayAmount, ltTokenCollateral, skipLiquidityCheck);
     }
 
     /**
      * @notice Transfers collateral tokens (this market) to the liquidator.
-     * @dev Will fail unless called by another vToken during the process of liquidation.
-     *  It's absolutely critical to use msg.sender as the borrowed vToken and not a parameter.
+     * @dev Will fail unless called by another ltToken during the process of liquidation.
+     *  It's absolutely critical to use msg.sender as the borrowed ltToken and not a parameter.
      * @param liquidator The account receiving seized collateral
      * @param borrower The account having collateral seized
-     * @param seizeTokens The number of vTokens to seize
+     * @param seizeTokens The number of ltTokens to seize
      * @custom:event Emits Transfer, ReservesAdded events
      * @custom:error LiquidateSeizeLiquidatorIsBorrower is thrown when trying to liquidate self
      * @custom:access Not restricted
@@ -689,8 +689,8 @@ contract VToken is
      * @custom:access Only Governance
      */
     function sweepToken(IERC20Upgradeable token) external override {
-        require(msg.sender == owner(), "VToken::sweepToken: only admin can sweep tokens");
-        require(address(token) != underlying, "VToken::sweepToken: can not sweep underlying token");
+        require(msg.sender == owner(), "ltToken::sweepToken: only admin can sweep tokens");
+        require(address(token) != underlying, "ltToken::sweepToken: can not sweep underlying token");
         uint256 balance = token.balanceOf(address(this));
         token.safeTransfer(owner(), balance);
 
@@ -733,7 +733,7 @@ contract VToken is
      * @dev This is used by comptroller to more efficiently perform liquidity checks.
      * @param account Address of the account to snapshot
      * @return error Always NO_ERROR for compatibility with Venus core tooling
-     * @return vTokenBalance User's balance of vTokens
+     * @return ltTokenBalance User's balance of ltTokens
      * @return borrowBalance Amount owed in terms of underlying
      * @return exchangeRate Stored exchange rate
      */
@@ -743,13 +743,13 @@ contract VToken is
         external
         view
         override
-        returns (uint256 error, uint256 vTokenBalance, uint256 borrowBalance, uint256 exchangeRate)
+        returns (uint256 error, uint256 ltTokenBalance, uint256 borrowBalance, uint256 exchangeRate)
     {
         return (NO_ERROR, accountTokens[account], _borrowBalanceStored(account), _exchangeRateStored());
     }
 
     /**
-     * @notice Get cash balance of this vToken in the underlying asset
+     * @notice Get cash balance of this ltToken in the underlying asset
      * @return cash The quantity of underlying asset owned by this contract
      */
     function getCash() external view override returns (uint256) {
@@ -757,7 +757,7 @@ contract VToken is
     }
 
     /**
-     * @notice Returns the current per slot(block or second) borrow interest rate for this vToken
+     * @notice Returns the current per slot(block or second) borrow interest rate for this ltToken
      * @return rate The borrow interest rate per slot(block or second), scaled by 1e18
      */
     function borrowRatePerBlock() external view override returns (uint256) {
@@ -789,7 +789,7 @@ contract VToken is
     }
 
     /**
-     * @notice Calculates the exchange rate from the underlying to the VToken
+     * @notice Calculates the exchange rate from the underlying to the LtToken.sol
      * @dev This function does not accrue interest before calculating the exchange rate
      * @return exchangeRate Calculated exchange rate scaled by 1e18
      */
@@ -884,7 +884,7 @@ contract VToken is
     }
 
     /**
-     * @notice User supplies assets into the market and receives vTokens in exchange
+     * @notice User supplies assets into the market and receives ltTokens in exchange
      * @dev Assumes interest has already been accrued up to the current block or timestamp
      * @param payer The address of the account which is sending the assets for supply
      * @param minter The address of the account which is supplying the assets
@@ -909,20 +909,20 @@ contract VToken is
          *  We call `_doTransferIn` for the minter and the mintAmount.
          *  `_doTransferIn` reverts if anything goes wrong, since we can't be sure if
          *  side-effects occurred. The function returns the amount actually transferred,
-         *  in case of a fee. On success, the vToken holds an additional `actualMintAmount`
+         *  in case of a fee. On success, the ltToken holds an additional `actualMintAmount`
          *  of cash.
          */
         uint256 actualMintAmount = _doTransferIn(payer, mintAmount);
 
         /*
-         * We get the current exchange rate and calculate the number of vTokens to be minted:
+         * We get the current exchange rate and calculate the number of ltTokens to be minted:
          *  mintTokens = actualMintAmount / exchangeRate
          */
 
         uint256 mintTokens = div_(actualMintAmount, exchangeRate);
 
         /*
-         * We calculate the new total supply of vTokens and minter token balance, checking for overflow:
+         * We calculate the new total supply of ltTokens and minter token balance, checking for overflow:
          *  totalSupplyNew = totalSupply + mintTokens
          *  accountTokensNew = accountTokens[minter] + mintTokens
          * And write them into storage
@@ -934,19 +934,16 @@ contract VToken is
         /* We emit a Mint event, and a Transfer event */
         emit Mint(minter, actualMintAmount, mintTokens, balanceAfter);
         emit Transfer(address(0), minter, mintTokens);
-
-        /* We call the defense and prime accrue interest hook */
-        comptroller.mintVerify(address(this), minter, actualMintAmount, mintTokens);
     }
 
     /**
-     * @notice Redeemer redeems vTokens in exchange for the underlying assets, transferred to the receiver. Redeemer and receiver can be the same
+     * @notice Redeemer redeems ltTokens in exchange for the underlying assets, transferred to the receiver. Redeemer and receiver can be the same
      *   address, or different addresses if the receiver was previously approved by the redeemer as a valid delegate (see Comptroller.updateDelegate)
      * @dev Assumes interest has already been accrued up to the current slot(block or second)
      * @param redeemer The address of the account which is redeeming the tokens
      * @param receiver The receiver of the underlying tokens
-     * @param redeemTokensIn The number of vTokens to redeem into underlying (only one of redeemTokensIn or redeemAmountIn may be non-zero)
-     * @param redeemAmountIn The number of underlying tokens to receive from redeeming vTokens (only one of redeemTokensIn or redeemAmountIn may be non-zero)
+     * @param redeemTokensIn The number of ltTokens to redeem into underlying (only one of redeemTokensIn or redeemAmountIn may be non-zero)
+     * @param redeemAmountIn The number of underlying tokens to receive from redeeming ltTokens (only one of redeemTokensIn or redeemAmountIn may be non-zero)
      */
     function _redeemFresh(address redeemer, address receiver, uint256 redeemTokensIn, uint256 redeemAmountIn) internal {
         require(redeemTokensIn == 0 || redeemAmountIn == 0, "one of redeemTokensIn or redeemAmountIn must be zero");
@@ -983,7 +980,7 @@ contract VToken is
         // redeemAmount = exchangeRate * redeemTokens
         redeemAmount = mul_ScalarTruncate(exchangeRate, redeemTokens);
 
-        // Revert if amount is zero
+        // Revert if amount is zero인
         if (redeemAmount == 0) {
             revert("redeemAmount is zero");
         }
@@ -1010,7 +1007,7 @@ contract VToken is
 
         /*
          * We invoke _doTransferOut for the receiver and the redeemAmount.
-         *  On success, the vToken has redeemAmount less of cash.
+         *  On success, the ltToken has redeemAmount less of cash.
          *  _doTransferOut reverts if anything goes wrong, since we can't be sure if side effects occurred.
          */
         _doTransferOut(receiver, redeemAmount);
@@ -1018,9 +1015,6 @@ contract VToken is
         /* We emit a Transfer event, and a Redeem event */
         emit Transfer(redeemer, address(this), redeemTokens);
         emit Redeem(redeemer, redeemAmount, redeemTokens, balanceAfter);
-
-        /* We call the defense and prime accrue interest hook */
-        comptroller.redeemVerify(address(this), redeemer, redeemAmount, redeemTokens);
     }
 
     /**
@@ -1066,16 +1060,13 @@ contract VToken is
 
         /*
          * We invoke _doTransferOut for the receiver and the borrowAmount.
-         *  On success, the vToken borrowAmount less of cash.
+         *  On success, the ltToken borrowAmount less of cash.
          *  _doTransferOut reverts if anything goes wrong, since we can't be sure if side effects occurred.
          */
         _doTransferOut(receiver, borrowAmount);
 
         /* We emit a Borrow event */
         emit Borrow(borrower, borrowAmount, accountBorrowsNew, totalBorrowsNew);
-
-        /* We call the defense and prime accrue interest hook */
-        comptroller.borrowVerify(address(this), borrower, borrowAmount);
     }
 
     /**
@@ -1105,7 +1096,7 @@ contract VToken is
 
         /*
          * We call _doTransferIn for the payer and the repayAmount
-         *  On success, the vToken holds an additional repayAmount of cash.
+         *  On success, the ltToken holds an additional repayAmount of cash.
          *  _doTransferIn reverts if anything goes wrong, since we can't be sure if side effects occurred.
          *   it returns the amount actually transferred, in case of a fee.
          */
@@ -1127,9 +1118,6 @@ contract VToken is
         /* We emit a RepayBorrow event */
         emit RepayBorrow(payer, borrower, actualRepayAmount, accountBorrowsNew, totalBorrowsNew);
 
-        /* We call the defense and prime accrue interest hook */
-        comptroller.repayBorrowVerify(address(this), payer, borrower, actualRepayAmount, borrowIndex);
-
         return actualRepayAmount;
     }
 
@@ -1137,8 +1125,8 @@ contract VToken is
      * @notice The sender liquidates the borrowers collateral.
      *  The collateral seized is transferred to the liquidator.
      * @param liquidator The address repaying the borrow and seizing collateral
-     * @param borrower The borrower of this vToken to be liquidated
-     * @param vTokenCollateral The market in which to seize collateral from the borrower
+     * @param borrower The borrower of this ltToken to be liquidated
+     * @param ltTokenCollateral The market in which to seize collateral from the borrower
      * @param repayAmount The amount of the underlying borrowed asset to repay
      * @param skipLiquidityCheck If set to true, allows to liquidate up to 100% of the borrow
      *   regardless of the account liquidity
@@ -1147,26 +1135,26 @@ contract VToken is
         address liquidator,
         address borrower,
         uint256 repayAmount,
-        VTokenInterface vTokenCollateral,
+        LtTokenInterface ltTokenCollateral,
         bool skipLiquidityCheck
     ) internal nonReentrant {
         accrueInterest();
 
-        uint256 error = vTokenCollateral.accrueInterest();
+        uint256 error = ltTokenCollateral.accrueInterest();
         if (error != NO_ERROR) {
             // accrueInterest emits logs on errors, but we still want to log the fact that an attempted liquidation failed
             revert LiquidateAccrueCollateralInterestFailed(error);
         }
 
-        _liquidateBorrowFresh(liquidator, borrower, repayAmount, vTokenCollateral, skipLiquidityCheck);
+        _liquidateBorrowFresh(liquidator, borrower, repayAmount, ltTokenCollateral, skipLiquidityCheck);
     }
 
     /**
      * @notice The liquidator liquidates the borrowers collateral.
      *  The collateral seized is transferred to the liquidator.
      * @param liquidator The address repaying the borrow and seizing collateral
-     * @param borrower The borrower of this vToken to be liquidated
-     * @param vTokenCollateral The market in which to seize collateral from the borrower
+     * @param borrower The borrower of this ltToken to be liquidated
+     * @param ltTokenCollateral The market in which to seize collateral from the borrower
      * @param repayAmount The amount of the underlying borrowed asset to repay
      * @param skipLiquidityCheck If set to true, allows to liquidate up to 100% of the borrow
      *   regardless of the account liquidity
@@ -1175,13 +1163,13 @@ contract VToken is
         address liquidator,
         address borrower,
         uint256 repayAmount,
-        VTokenInterface vTokenCollateral,
+        LtTokenInterface ltTokenCollateral,
         bool skipLiquidityCheck
     ) internal {
         /* Fail if liquidate not allowed */
         comptroller.preLiquidateHook(
             address(this),
-            address(vTokenCollateral),
+            address(ltTokenCollateral),
             borrower,
             repayAmount,
             skipLiquidityCheck
@@ -1192,8 +1180,8 @@ contract VToken is
             revert LiquidateFreshnessCheck();
         }
 
-        /* Verify vTokenCollateral market's slot(block or second) number equals current slot(block or second) number */
-        if (vTokenCollateral.accrualBlockNumber() != getBlockNumberOrTimestamp()) {
+        /* Verify ltTokenCollateral market's slot(block or second) number equals current slot(block or second) number */
+        if (ltTokenCollateral.accrualBlockNumber() != getBlockNumberOrTimestamp()) {
             revert LiquidateCollateralFreshnessCheck();
         }
 
@@ -1222,43 +1210,33 @@ contract VToken is
         /* We calculate the number of collateral tokens that will be seized */
         (uint256 amountSeizeError, uint256 seizeTokens) = comptroller.liquidateCalculateSeizeTokens(
             address(this),
-            address(vTokenCollateral),
+            address(ltTokenCollateral),
             actualRepayAmount
         );
         require(amountSeizeError == NO_ERROR, "LIQUIDATE_COMPTROLLER_CALCULATE_AMOUNT_SEIZE_FAILED");
 
         /* Revert if borrower collateral token balance < seizeTokens */
-        require(vTokenCollateral.balanceOf(borrower) >= seizeTokens, "LIQUIDATE_SEIZE_TOO_MUCH");
+        require(ltTokenCollateral.balanceOf(borrower) >= seizeTokens, "LIQUIDATE_SEIZE_TOO_MUCH");
 
         // If this is also the collateral, call _seize internally to avoid re-entrancy, otherwise make an external call
-        if (address(vTokenCollateral) == address(this)) {
+        if (address(ltTokenCollateral) == address(this)) {
             _seize(address(this), liquidator, borrower, seizeTokens);
         } else {
-            vTokenCollateral.seize(liquidator, borrower, seizeTokens);
+            ltTokenCollateral.seize(liquidator, borrower, seizeTokens);
         }
 
         /* We emit a LiquidateBorrow event */
-        emit LiquidateBorrow(liquidator, borrower, actualRepayAmount, address(vTokenCollateral), seizeTokens);
-
-        /* We call the defense and prime accrue interest hook */
-        comptroller.liquidateBorrowVerify(
-            address(this),
-            address(vTokenCollateral),
-            liquidator,
-            borrower,
-            actualRepayAmount,
-            seizeTokens
-        );
+        emit LiquidateBorrow(liquidator, borrower, actualRepayAmount, address(ltTokenCollateral), seizeTokens);
     }
 
     /**
      * @notice Transfers collateral tokens (this market) to the liquidator.
-     * @dev Called only during an in-kind liquidation, or by liquidateBorrow during the liquidation of another VToken.
-     *  It's absolutely critical to use msg.sender as the seizer vToken and not a parameter.
-     * @param seizerContract The contract seizing the collateral (either borrowed vToken or Comptroller)
+     * @dev Called only during an in-kind liquidation, or by liquidateBorrow during the liquidation of another LtToken.sol.
+     *  It's absolutely critical to use msg.sender as the seizer ltToken and not a parameter.
+     * @param seizerContract The contract seizing the collateral (either borrowed ltToken or Comptroller)
      * @param liquidator The account receiving seized collateral
      * @param borrower The account having collateral seized
-     * @param seizeTokens The number of vTokens to seize
+     * @param seizeTokens The number of ltTokens to seize
      */
     function _seize(address seizerContract, address liquidator, address borrower, uint256 seizeTokens) internal {
         /* Fail if seize not allowed */
@@ -1305,9 +1283,6 @@ contract VToken is
         /* Emit a Transfer event */
         emit Transfer(borrower, liquidator, liquidatorSeizeTokens);
         emit ProtocolSeize(borrower, protocolShareReserve, protocolSeizeAmount);
-
-        /* We call the defense and prime accrue interest hook */
-        comptroller.seizeVerify(address(this), seizerContract, liquidator, borrower, seizeTokens);
     }
 
     function _setComptroller(ComptrollerInterface newComptroller) internal {
@@ -1519,8 +1494,6 @@ contract VToken is
 
         /* We emit a Transfer event */
         emit Transfer(src, dst, tokens);
-
-        comptroller.transferVerify(address(this), src, dst, tokens);
     }
 
     /**
@@ -1639,7 +1612,7 @@ contract VToken is
     }
 
     /**
-     * @notice Calculates the exchange rate from the underlying to the VToken
+     * @notice Calculates the exchange rate from the underlying to the LtToken.sol
      * @dev This function does not accrue interest before calculating the exchange rate
      * @return exchangeRate Calculated exchange rate scaled by 1e18
      */
