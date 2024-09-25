@@ -4,13 +4,13 @@ pragma solidity 0.8.25;
 import { Ownable2StepUpgradeable } from "@openzeppelin/contracts-upgradeable/access/Ownable2StepUpgradeable.sol";
 import { IERC20Upgradeable } from "@openzeppelin/contracts-upgradeable/token/ERC20/IERC20Upgradeable.sol";
 import { SafeERC20Upgradeable } from "@openzeppelin/contracts-upgradeable/token/ERC20/utils/SafeERC20Upgradeable.sol";
-import { AccessControlledV8 } from "@venusprotocol/governance-contracts/contracts/Governance/AccessControlledV8.sol";
-import { TimeManagerV8 } from "@venusprotocol/solidity-utilities/contracts/TimeManagerV8.sol";
+import { AccessControlledV8 } from "../ACM/AccessControlledV8.sol";
+import { TimeManagerV8 } from "../lib/TimeManagerV8.sol";
 
 import { ExponentialNoError } from "../ExponentialNoError.sol";
-import { VToken } from "../VToken.sol";
+import {LtToken} from "../LtToken.sol";
 import { Comptroller } from "../Comptroller.sol";
-import { MaxLoopsLimitHelper } from "../MaxLoopsLimitHelper.sol";
+import { MaxLoopsLimitHelper } from "../lib/MaxLoopsLimitHelper.sol";
 import { RewardsDistributorStorage } from "./RewardsDistributorStorage.sol";
 
 /**
@@ -43,7 +43,7 @@ contract RewardsDistributor is
 
     /// @notice Emitted when REWARD TOKEN is distributed to a supplier
     event DistributedSupplierRewardToken(
-        VToken indexed vToken,
+        LtToken indexed ltToken,
         address indexed supplier,
         uint256 rewardTokenDelta,
         uint256 rewardTokenTotal,
@@ -52,7 +52,7 @@ contract RewardsDistributor is
 
     /// @notice Emitted when REWARD TOKEN is distributed to a borrower
     event DistributedBorrowerRewardToken(
-        VToken indexed vToken,
+        LtToken indexed ltToken,
         address indexed borrower,
         uint256 rewardTokenDelta,
         uint256 rewardTokenTotal,
@@ -60,10 +60,10 @@ contract RewardsDistributor is
     );
 
     /// @notice Emitted when a new supply-side REWARD TOKEN speed is calculated for a market
-    event RewardTokenSupplySpeedUpdated(VToken indexed vToken, uint256 newSpeed);
+    event RewardTokenSupplySpeedUpdated(LtToken indexed ltToken, uint256 newSpeed);
 
     /// @notice Emitted when a new borrow-side REWARD TOKEN speed is calculated for a market
-    event RewardTokenBorrowSpeedUpdated(VToken indexed vToken, uint256 newSpeed);
+    event RewardTokenBorrowSpeedUpdated(LtToken indexed ltToken, uint256 newSpeed);
 
     /// @notice Emitted when REWARD TOKEN is granted by admin
     event RewardTokenGranted(address indexed recipient, uint256 amount);
@@ -72,28 +72,28 @@ contract RewardsDistributor is
     event ContributorRewardTokenSpeedUpdated(address indexed contributor, uint256 newSpeed);
 
     /// @notice Emitted when a market is initialized
-    event MarketInitialized(address indexed vToken);
+    event MarketInitialized(address indexed ltToken);
 
     /// @notice Emitted when a reward token supply index is updated
-    event RewardTokenSupplyIndexUpdated(address indexed vToken);
+    event RewardTokenSupplyIndexUpdated(address indexed ltToken);
 
     /// @notice Emitted when a reward token borrow index is updated
-    event RewardTokenBorrowIndexUpdated(address indexed vToken, Exp marketBorrowIndex);
+    event RewardTokenBorrowIndexUpdated(address indexed ltToken, Exp marketBorrowIndex);
 
     /// @notice Emitted when a reward for contributor is updated
     event ContributorRewardsUpdated(address indexed contributor, uint256 rewardAccrued);
 
     /// @notice Emitted when a reward token last rewarding block for supply is updated
-    event SupplyLastRewardingBlockUpdated(address indexed vToken, uint32 newBlock);
+    event SupplyLastRewardingBlockUpdated(address indexed ltToken, uint32 newBlock);
 
     /// @notice Emitted when a reward token last rewarding block for borrow is updated
-    event BorrowLastRewardingBlockUpdated(address indexed vToken, uint32 newBlock);
+    event BorrowLastRewardingBlockUpdated(address indexed ltToken, uint32 newBlock);
 
     /// @notice Emitted when a reward token last rewarding timestamp for supply is updated
-    event SupplyLastRewardingBlockTimestampUpdated(address indexed vToken, uint256 newTimestamp);
+    event SupplyLastRewardingBlockTimestampUpdated(address indexed ltToken, uint256 newTimestamp);
 
     /// @notice Emitted when a reward token last rewarding timestamp for borrow is updated
-    event BorrowLastRewardingBlockTimestampUpdated(address indexed vToken, uint256 newTimestamp);
+    event BorrowLastRewardingBlockTimestampUpdated(address indexed ltToken, uint256 newTimestamp);
 
     modifier onlyComptroller() {
         require(address(comptroller) == msg.sender, "Only comptroller can call this function");
@@ -134,19 +134,19 @@ contract RewardsDistributor is
     }
 
     /**
-     * @notice Initializes the market state for a specific vToken
-     * @param vToken The address of the vToken to be initialized
+     * @notice Initializes the market state for a specific ltToken
+     * @param ltToken The address of the ltToken to be initialized
      * @custom:event MarketInitialized emits on success
      * @custom:access Only Comptroller
      */
-    function initializeMarket(address vToken) external onlyComptroller {
+    function initializeMarket(address ltToken) external onlyComptroller {
         uint256 blockNumberOrTimestamp = getBlockNumberOrTimestamp();
 
         isTimeBased
-            ? _initializeMarketTimestampBased(vToken, blockNumberOrTimestamp)
-            : _initializeMarketBlockBased(vToken, safe32(blockNumberOrTimestamp, "block number exceeds 32 bits"));
+            ? _initializeMarketTimestampBased(ltToken, blockNumberOrTimestamp)
+            : _initializeMarketBlockBased(ltToken, safe32(blockNumberOrTimestamp, "block number exceeds 32 bits"));
 
-        emit MarketInitialized(vToken);
+        emit MarketInitialized(ltToken);
     }
 
     /*** Reward Token Distribution ***/
@@ -157,20 +157,20 @@ contract RewardsDistributor is
      * @dev This function should only be called when the user has a borrow position in the market
      *      (e.g. Comptroller.preBorrowHook, and Comptroller.preRepayHook)
      *      We avoid an external call to check if they are in the market to save gas because this function is called in many places
-     * @param vToken The market in which the borrower is interacting
+     * @param ltToken The market in which the borrower is interacting
      * @param borrower The address of the borrower to distribute REWARD TOKEN to
-     * @param marketBorrowIndex The current global borrow index of vToken
+     * @param marketBorrowIndex The current global borrow index of ltToken
      */
     function distributeBorrowerRewardToken(
-        address vToken,
+        address ltToken,
         address borrower,
         Exp memory marketBorrowIndex
     ) external onlyComptroller {
-        _distributeBorrowerRewardToken(vToken, borrower, marketBorrowIndex);
+        _distributeBorrowerRewardToken(ltToken, borrower, marketBorrowIndex);
     }
 
-    function updateRewardTokenSupplyIndex(address vToken) external onlyComptroller {
-        _updateRewardTokenSupplyIndex(vToken);
+    function updateRewardTokenSupplyIndex(address ltToken) external onlyComptroller {
+        _updateRewardTokenSupplyIndex(ltToken);
     }
 
     /**
@@ -185,52 +185,52 @@ contract RewardsDistributor is
         emit RewardTokenGranted(recipient, amount);
     }
 
-    function updateRewardTokenBorrowIndex(address vToken, Exp memory marketBorrowIndex) external onlyComptroller {
-        _updateRewardTokenBorrowIndex(vToken, marketBorrowIndex);
+    function updateRewardTokenBorrowIndex(address ltToken, Exp memory marketBorrowIndex) external onlyComptroller {
+        _updateRewardTokenBorrowIndex(ltToken, marketBorrowIndex);
     }
 
     /**
      * @notice Set REWARD TOKEN borrow and supply speeds for the specified markets
-     * @param vTokens The markets whose REWARD TOKEN speed to update
+     * @param ltTokens The markets whose REWARD TOKEN speed to update
      * @param supplySpeeds New supply-side REWARD TOKEN speed for the corresponding market
      * @param borrowSpeeds New borrow-side REWARD TOKEN speed for the corresponding market
      */
     function setRewardTokenSpeeds(
-        VToken[] memory vTokens,
+        LtToken[] memory ltTokens,
         uint256[] memory supplySpeeds,
         uint256[] memory borrowSpeeds
     ) external {
         _checkAccessAllowed("setRewardTokenSpeeds(address[],uint256[],uint256[])");
-        uint256 numTokens = vTokens.length;
+        uint256 numTokens = ltTokens.length;
         require(numTokens == supplySpeeds.length && numTokens == borrowSpeeds.length, "invalid setRewardTokenSpeeds");
 
         for (uint256 i; i < numTokens; ++i) {
-            _setRewardTokenSpeed(vTokens[i], supplySpeeds[i], borrowSpeeds[i]);
+            _setRewardTokenSpeed(ltTokens[i], supplySpeeds[i], borrowSpeeds[i]);
         }
     }
 
     /**
      * @notice Set REWARD TOKEN last rewarding block for the specified markets, used when contract is block based
-     * @param vTokens The markets whose REWARD TOKEN last rewarding block to update
+     * @param ltTokens The markets whose REWARD TOKEN last rewarding block to update
      * @param supplyLastRewardingBlocks New supply-side REWARD TOKEN last rewarding block for the corresponding market
      * @param borrowLastRewardingBlocks New borrow-side REWARD TOKEN last rewarding block for the corresponding market
      */
     function setLastRewardingBlocks(
-        VToken[] calldata vTokens,
+        LtToken[] calldata ltTokens,
         uint32[] calldata supplyLastRewardingBlocks,
         uint32[] calldata borrowLastRewardingBlocks
     ) external {
         _checkAccessAllowed("setLastRewardingBlocks(address[],uint32[],uint32[])");
         require(!isTimeBased, "Block-based operation only");
 
-        uint256 numTokens = vTokens.length;
+        uint256 numTokens = ltTokens.length;
         require(
             numTokens == supplyLastRewardingBlocks.length && numTokens == borrowLastRewardingBlocks.length,
             "RewardsDistributor::setLastRewardingBlocks invalid input"
         );
 
         for (uint256 i; i < numTokens; ) {
-            _setLastRewardingBlock(vTokens[i], supplyLastRewardingBlocks[i], borrowLastRewardingBlocks[i]);
+            _setLastRewardingBlock(ltTokens[i], supplyLastRewardingBlocks[i], borrowLastRewardingBlocks[i]);
             unchecked {
                 ++i;
             }
@@ -239,19 +239,19 @@ contract RewardsDistributor is
 
     /**
      * @notice Set REWARD TOKEN last rewarding block timestamp for the specified markets, used when contract is time based
-     * @param vTokens The markets whose REWARD TOKEN last rewarding block to update
+     * @param ltTokens The markets whose REWARD TOKEN last rewarding block to update
      * @param supplyLastRewardingBlockTimestamps New supply-side REWARD TOKEN last rewarding block timestamp for the corresponding market
      * @param borrowLastRewardingBlockTimestamps New borrow-side REWARD TOKEN last rewarding block timestamp for the corresponding market
      */
     function setLastRewardingBlockTimestamps(
-        VToken[] calldata vTokens,
+        LtToken[] calldata ltTokens,
         uint256[] calldata supplyLastRewardingBlockTimestamps,
         uint256[] calldata borrowLastRewardingBlockTimestamps
     ) external {
         _checkAccessAllowed("setLastRewardingBlockTimestamps(address[],uint256[],uint256[])");
         require(isTimeBased, "Time-based operation only");
 
-        uint256 numTokens = vTokens.length;
+        uint256 numTokens = ltTokens.length;
         require(
             numTokens == supplyLastRewardingBlockTimestamps.length &&
                 numTokens == borrowLastRewardingBlockTimestamps.length,
@@ -260,7 +260,7 @@ contract RewardsDistributor is
 
         for (uint256 i; i < numTokens; ) {
             _setLastRewardingBlockTimestamp(
-                vTokens[i],
+                ltTokens[i],
                 supplyLastRewardingBlockTimestamps[i],
                 borrowLastRewardingBlockTimestamps[i]
             );
@@ -289,8 +289,8 @@ contract RewardsDistributor is
         emit ContributorRewardTokenSpeedUpdated(contributor, rewardTokenSpeed);
     }
 
-    function distributeSupplierRewardToken(address vToken, address supplier) external onlyComptroller {
-        _distributeSupplierRewardToken(vToken, supplier);
+    function distributeSupplierRewardToken(address ltToken, address supplier) external onlyComptroller {
+        _distributeSupplierRewardToken(ltToken, supplier);
     }
 
     /**
@@ -331,45 +331,45 @@ contract RewardsDistributor is
     /**
      * @notice Claim all the rewardToken accrued by holder in the specified markets
      * @param holder The address to claim REWARD TOKEN for
-     * @param vTokens The list of markets to claim REWARD TOKEN in
+     * @param ltTokens The list of markets to claim REWARD TOKEN in
      */
-    function claimRewardToken(address holder, VToken[] memory vTokens) public {
-        uint256 vTokensCount = vTokens.length;
+    function claimRewardToken(address holder, LtToken[] memory ltTokens) public {
+        uint256 ltTokensCount = ltTokens.length;
 
-        _ensureMaxLoops(vTokensCount);
+        _ensureMaxLoops(ltTokensCount);
 
-        for (uint256 i; i < vTokensCount; ++i) {
-            VToken vToken = vTokens[i];
-            require(comptroller.isMarketListed(vToken), "market must be listed");
-            Exp memory borrowIndex = Exp({ mantissa: vToken.borrowIndex() });
-            _updateRewardTokenBorrowIndex(address(vToken), borrowIndex);
-            _distributeBorrowerRewardToken(address(vToken), holder, borrowIndex);
-            _updateRewardTokenSupplyIndex(address(vToken));
-            _distributeSupplierRewardToken(address(vToken), holder);
+        for (uint256 i; i < ltTokensCount; ++i) {
+            LtToken ltToken = ltTokens[i];
+            require(comptroller.isMarketListed(ltToken), "market must be listed");
+            Exp memory borrowIndex = Exp({ mantissa: ltToken.borrowIndex() });
+            _updateRewardTokenBorrowIndex(address(ltToken), borrowIndex);
+            _distributeBorrowerRewardToken(address(ltToken), holder, borrowIndex);
+            _updateRewardTokenSupplyIndex(address(ltToken));
+            _distributeSupplierRewardToken(address(ltToken), holder);
         }
         rewardTokenAccrued[holder] = _grantRewardToken(holder, rewardTokenAccrued[holder]);
     }
 
     /**
      * @notice Set REWARD TOKEN last rewarding block for a single market.
-     * @param vToken market's whose reward token last rewarding block to be updated
+     * @param ltToken market's whose reward token last rewarding block to be updated
      * @param supplyLastRewardingBlock New supply-side REWARD TOKEN last rewarding block for market
      * @param borrowLastRewardingBlock New borrow-side REWARD TOKEN last rewarding block for market
      */
     function _setLastRewardingBlock(
-        VToken vToken,
+        LtToken ltToken,
         uint32 supplyLastRewardingBlock,
         uint32 borrowLastRewardingBlock
     ) internal {
-        require(comptroller.isMarketListed(vToken), "rewardToken market is not listed");
+        require(comptroller.isMarketListed(ltToken), "rewardToken market is not listed");
 
         uint256 blockNumber = getBlockNumberOrTimestamp();
 
         require(supplyLastRewardingBlock > blockNumber, "setting last rewarding block in the past is not allowed");
         require(borrowLastRewardingBlock > blockNumber, "setting last rewarding block in the past is not allowed");
 
-        uint32 currentSupplyLastRewardingBlock = rewardTokenSupplyState[address(vToken)].lastRewardingBlock;
-        uint32 currentBorrowLastRewardingBlock = rewardTokenBorrowState[address(vToken)].lastRewardingBlock;
+        uint32 currentSupplyLastRewardingBlock = rewardTokenSupplyState[address(ltToken)].lastRewardingBlock;
+        uint32 currentBorrowLastRewardingBlock = rewardTokenBorrowState[address(ltToken)].lastRewardingBlock;
 
         require(
             currentSupplyLastRewardingBlock == 0 || currentSupplyLastRewardingBlock > blockNumber,
@@ -381,28 +381,28 @@ contract RewardsDistributor is
         );
 
         if (currentSupplyLastRewardingBlock != supplyLastRewardingBlock) {
-            rewardTokenSupplyState[address(vToken)].lastRewardingBlock = supplyLastRewardingBlock;
-            emit SupplyLastRewardingBlockUpdated(address(vToken), supplyLastRewardingBlock);
+            rewardTokenSupplyState[address(ltToken)].lastRewardingBlock = supplyLastRewardingBlock;
+            emit SupplyLastRewardingBlockUpdated(address(ltToken), supplyLastRewardingBlock);
         }
 
         if (currentBorrowLastRewardingBlock != borrowLastRewardingBlock) {
-            rewardTokenBorrowState[address(vToken)].lastRewardingBlock = borrowLastRewardingBlock;
-            emit BorrowLastRewardingBlockUpdated(address(vToken), borrowLastRewardingBlock);
+            rewardTokenBorrowState[address(ltToken)].lastRewardingBlock = borrowLastRewardingBlock;
+            emit BorrowLastRewardingBlockUpdated(address(ltToken), borrowLastRewardingBlock);
         }
     }
 
     /**
      * @notice Set REWARD TOKEN last rewarding timestamp for a single market.
-     * @param vToken market's whose reward token last rewarding timestamp to be updated
+     * @param ltToken market's whose reward token last rewarding timestamp to be updated
      * @param supplyLastRewardingBlockTimestamp New supply-side REWARD TOKEN last rewarding timestamp for market
      * @param borrowLastRewardingBlockTimestamp New borrow-side REWARD TOKEN last rewarding timestamp for market
      */
     function _setLastRewardingBlockTimestamp(
-        VToken vToken,
+        LtToken ltToken,
         uint256 supplyLastRewardingBlockTimestamp,
         uint256 borrowLastRewardingBlockTimestamp
     ) internal {
-        require(comptroller.isMarketListed(vToken), "rewardToken market is not listed");
+        require(comptroller.isMarketListed(ltToken), "rewardToken market is not listed");
 
         uint256 blockTimestamp = getBlockNumberOrTimestamp();
 
@@ -415,9 +415,9 @@ contract RewardsDistributor is
             "setting last rewarding timestamp in the past is not allowed"
         );
 
-        uint256 currentSupplyLastRewardingBlockTimestamp = rewardTokenSupplyStateTimeBased[address(vToken)]
+        uint256 currentSupplyLastRewardingBlockTimestamp = rewardTokenSupplyStateTimeBased[address(ltToken)]
             .lastRewardingTimestamp;
-        uint256 currentBorrowLastRewardingBlockTimestamp = rewardTokenBorrowStateTimeBased[address(vToken)]
+        uint256 currentBorrowLastRewardingBlockTimestamp = rewardTokenBorrowStateTimeBased[address(ltToken)]
             .lastRewardingTimestamp;
 
         require(
@@ -430,63 +430,63 @@ contract RewardsDistributor is
         );
 
         if (currentSupplyLastRewardingBlockTimestamp != supplyLastRewardingBlockTimestamp) {
-            rewardTokenSupplyStateTimeBased[address(vToken)].lastRewardingTimestamp = supplyLastRewardingBlockTimestamp;
-            emit SupplyLastRewardingBlockTimestampUpdated(address(vToken), supplyLastRewardingBlockTimestamp);
+            rewardTokenSupplyStateTimeBased[address(ltToken)].lastRewardingTimestamp = supplyLastRewardingBlockTimestamp;
+            emit SupplyLastRewardingBlockTimestampUpdated(address(ltToken), supplyLastRewardingBlockTimestamp);
         }
 
         if (currentBorrowLastRewardingBlockTimestamp != borrowLastRewardingBlockTimestamp) {
-            rewardTokenBorrowStateTimeBased[address(vToken)].lastRewardingTimestamp = borrowLastRewardingBlockTimestamp;
-            emit BorrowLastRewardingBlockTimestampUpdated(address(vToken), borrowLastRewardingBlockTimestamp);
+            rewardTokenBorrowStateTimeBased[address(ltToken)].lastRewardingTimestamp = borrowLastRewardingBlockTimestamp;
+            emit BorrowLastRewardingBlockTimestampUpdated(address(ltToken), borrowLastRewardingBlockTimestamp);
         }
     }
 
     /**
      * @notice Set REWARD TOKEN speed for a single market.
-     * @param vToken market's whose reward token rate to be updated
+     * @param ltToken market's whose reward token rate to be updated
      * @param supplySpeed New supply-side REWARD TOKEN speed for market
      * @param borrowSpeed New borrow-side REWARD TOKEN speed for market
      */
-    function _setRewardTokenSpeed(VToken vToken, uint256 supplySpeed, uint256 borrowSpeed) internal {
-        require(comptroller.isMarketListed(vToken), "rewardToken market is not listed");
+    function _setRewardTokenSpeed(LtToken ltToken, uint256 supplySpeed, uint256 borrowSpeed) internal {
+        require(comptroller.isMarketListed(ltToken), "rewardToken market is not listed");
 
-        if (rewardTokenSupplySpeeds[address(vToken)] != supplySpeed) {
+        if (rewardTokenSupplySpeeds[address(ltToken)] != supplySpeed) {
             // Supply speed updated so let's update supply state to ensure that
             //  1. REWARD TOKEN accrued properly for the old speed, and
             //  2. REWARD TOKEN accrued at the new speed starts after this block.
-            _updateRewardTokenSupplyIndex(address(vToken));
+            _updateRewardTokenSupplyIndex(address(ltToken));
 
             // Update speed and emit event
-            rewardTokenSupplySpeeds[address(vToken)] = supplySpeed;
-            emit RewardTokenSupplySpeedUpdated(vToken, supplySpeed);
+            rewardTokenSupplySpeeds[address(ltToken)] = supplySpeed;
+            emit RewardTokenSupplySpeedUpdated(ltToken, supplySpeed);
         }
 
-        if (rewardTokenBorrowSpeeds[address(vToken)] != borrowSpeed) {
+        if (rewardTokenBorrowSpeeds[address(ltToken)] != borrowSpeed) {
             // Borrow speed updated so let's update borrow state to ensure that
             //  1. REWARD TOKEN accrued properly for the old speed, and
             //  2. REWARD TOKEN accrued at the new speed starts after this block.
-            Exp memory borrowIndex = Exp({ mantissa: vToken.borrowIndex() });
-            _updateRewardTokenBorrowIndex(address(vToken), borrowIndex);
+            Exp memory borrowIndex = Exp({ mantissa: ltToken.borrowIndex() });
+            _updateRewardTokenBorrowIndex(address(ltToken), borrowIndex);
 
             // Update speed and emit event
-            rewardTokenBorrowSpeeds[address(vToken)] = borrowSpeed;
-            emit RewardTokenBorrowSpeedUpdated(vToken, borrowSpeed);
+            rewardTokenBorrowSpeeds[address(ltToken)] = borrowSpeed;
+            emit RewardTokenBorrowSpeedUpdated(ltToken, borrowSpeed);
         }
     }
 
     /**
      * @notice Calculate REWARD TOKEN accrued by a supplier and possibly transfer it to them.
-     * @param vToken The market in which the supplier is interacting
+     * @param ltToken The market in which the supplier is interacting
      * @param supplier The address of the supplier to distribute REWARD TOKEN to
      */
-    function _distributeSupplierRewardToken(address vToken, address supplier) internal {
-        RewardToken storage supplyState = rewardTokenSupplyState[vToken];
-        TimeBasedRewardToken storage supplyStateTimeBased = rewardTokenSupplyStateTimeBased[vToken];
+    function _distributeSupplierRewardToken(address ltToken, address supplier) internal {
+        RewardToken storage supplyState = rewardTokenSupplyState[ltToken];
+        TimeBasedRewardToken storage supplyStateTimeBased = rewardTokenSupplyStateTimeBased[ltToken];
 
         uint256 supplyIndex = isTimeBased ? supplyStateTimeBased.index : supplyState.index;
-        uint256 supplierIndex = rewardTokenSupplierIndex[vToken][supplier];
+        uint256 supplierIndex = rewardTokenSupplierIndex[ltToken][supplier];
 
         // Update supplier's index to the current index since we are distributing accrued REWARD TOKEN
-        rewardTokenSupplierIndex[vToken][supplier] = supplyIndex;
+        rewardTokenSupplierIndex[ltToken][supplier] = supplyIndex;
 
         if (supplierIndex == 0 && supplyIndex >= INITIAL_INDEX) {
             // Covers the case where users supplied tokens before the market's supply state index was set.
@@ -495,35 +495,35 @@ contract RewardsDistributor is
             supplierIndex = INITIAL_INDEX;
         }
 
-        // Calculate change in the cumulative sum of the REWARD TOKEN per vToken accrued
+        // Calculate change in the cumulative sum of the REWARD TOKEN per ltToken accrued
         Double memory deltaIndex = Double({ mantissa: sub_(supplyIndex, supplierIndex) });
 
-        uint256 supplierTokens = VToken(vToken).balanceOf(supplier);
+        uint256 supplierTokens = LtToken(ltToken).balanceOf(supplier);
 
-        // Calculate REWARD TOKEN accrued: vTokenAmount * accruedPerVToken
+        // Calculate REWARD TOKEN accrued: ltTokenAmount * accruedPerLtToken
         uint256 supplierDelta = mul_(supplierTokens, deltaIndex);
 
         uint256 supplierAccrued = add_(rewardTokenAccrued[supplier], supplierDelta);
         rewardTokenAccrued[supplier] = supplierAccrued;
 
-        emit DistributedSupplierRewardToken(VToken(vToken), supplier, supplierDelta, supplierAccrued, supplyIndex);
+        emit DistributedSupplierRewardToken(LtToken(ltToken), supplier, supplierDelta, supplierAccrued, supplyIndex);
     }
 
     /**
      * @notice Calculate reward token accrued by a borrower and possibly transfer it to them.
-     * @param vToken The market in which the borrower is interacting
+     * @param ltToken The market in which the borrower is interacting
      * @param borrower The address of the borrower to distribute REWARD TOKEN to
-     * @param marketBorrowIndex The current global borrow index of vToken
+     * @param marketBorrowIndex The current global borrow index of ltToken
      */
-    function _distributeBorrowerRewardToken(address vToken, address borrower, Exp memory marketBorrowIndex) internal {
-        RewardToken storage borrowState = rewardTokenBorrowState[vToken];
-        TimeBasedRewardToken storage borrowStateTimeBased = rewardTokenBorrowStateTimeBased[vToken];
+    function _distributeBorrowerRewardToken(address ltToken, address borrower, Exp memory marketBorrowIndex) internal {
+        RewardToken storage borrowState = rewardTokenBorrowState[ltToken];
+        TimeBasedRewardToken storage borrowStateTimeBased = rewardTokenBorrowStateTimeBased[ltToken];
 
         uint256 borrowIndex = isTimeBased ? borrowStateTimeBased.index : borrowState.index;
-        uint256 borrowerIndex = rewardTokenBorrowerIndex[vToken][borrower];
+        uint256 borrowerIndex = rewardTokenBorrowerIndex[ltToken][borrower];
 
         // Update borrowers's index to the current index since we are distributing accrued REWARD TOKEN
-        rewardTokenBorrowerIndex[vToken][borrower] = borrowIndex;
+        rewardTokenBorrowerIndex[ltToken][borrower] = borrowIndex;
 
         if (borrowerIndex == 0 && borrowIndex >= INITIAL_INDEX) {
             // Covers the case where users borrowed tokens before the market's borrow state index was set.
@@ -535,16 +535,16 @@ contract RewardsDistributor is
         // Calculate change in the cumulative sum of the REWARD TOKEN per borrowed unit accrued
         Double memory deltaIndex = Double({ mantissa: sub_(borrowIndex, borrowerIndex) });
 
-        uint256 borrowerAmount = div_(VToken(vToken).borrowBalanceStored(borrower), marketBorrowIndex);
+        uint256 borrowerAmount = div_(LtToken(ltToken).borrowBalanceStored(borrower), marketBorrowIndex);
 
-        // Calculate REWARD TOKEN accrued: vTokenAmount * accruedPerBorrowedUnit
+        // Calculate REWARD TOKEN accrued: ltTokenAmount * accruedPerBorrowedUnit
         if (borrowerAmount != 0) {
             uint256 borrowerDelta = mul_(borrowerAmount, deltaIndex);
 
             uint256 borrowerAccrued = add_(rewardTokenAccrued[borrower], borrowerDelta);
             rewardTokenAccrued[borrower] = borrowerAccrued;
 
-            emit DistributedBorrowerRewardToken(VToken(vToken), borrower, borrowerDelta, borrowerAccrued, borrowIndex);
+            emit DistributedBorrowerRewardToken(LtToken(ltToken), borrower, borrowerDelta, borrowerAccrued, borrowIndex);
         }
     }
 
@@ -566,14 +566,14 @@ contract RewardsDistributor is
 
     /**
      * @notice Accrue REWARD TOKEN to the market by updating the supply index
-     * @param vToken The market whose supply index to update
-     * @dev Index is a cumulative sum of the REWARD TOKEN per vToken accrued
+     * @param ltToken The market whose supply index to update
+     * @dev Index is a cumulative sum of the REWARD TOKEN per ltToken accrued
      */
-    function _updateRewardTokenSupplyIndex(address vToken) internal {
-        RewardToken storage supplyState = rewardTokenSupplyState[vToken];
-        TimeBasedRewardToken storage supplyStateTimeBased = rewardTokenSupplyStateTimeBased[vToken];
+    function _updateRewardTokenSupplyIndex(address ltToken) internal {
+        RewardToken storage supplyState = rewardTokenSupplyState[ltToken];
+        TimeBasedRewardToken storage supplyStateTimeBased = rewardTokenSupplyStateTimeBased[ltToken];
 
-        uint256 supplySpeed = rewardTokenSupplySpeeds[vToken];
+        uint256 supplySpeed = rewardTokenSupplySpeeds[ltToken];
         uint256 blockNumberOrTimestamp = getBlockNumberOrTimestamp();
 
         if (!isTimeBased) {
@@ -593,7 +593,7 @@ contract RewardsDistributor is
             (isTimeBased ? supplyStateTimeBased.timestamp : uint256(supplyState.block))
         );
         if (deltaBlocksOrTimestamp > 0 && supplySpeed > 0) {
-            uint256 supplyTokens = VToken(vToken).totalSupply();
+            uint256 supplyTokens = LtToken(ltToken).totalSupply();
             uint256 accruedSinceUpdate = mul_(deltaBlocksOrTimestamp, supplySpeed);
             Double memory ratio = supplyTokens > 0
                 ? fraction(accruedSinceUpdate, supplyTokens)
@@ -617,20 +617,20 @@ contract RewardsDistributor is
             );
         }
 
-        emit RewardTokenSupplyIndexUpdated(vToken);
+        emit RewardTokenSupplyIndexUpdated(ltToken);
     }
 
     /**
      * @notice Accrue REWARD TOKEN to the market by updating the borrow index
-     * @param vToken The market whose borrow index to update
-     * @param marketBorrowIndex The current global borrow index of vToken
-     * @dev Index is a cumulative sum of the REWARD TOKEN per vToken accrued
+     * @param ltToken The market whose borrow index to update
+     * @param marketBorrowIndex The current global borrow index of ltToken
+     * @dev Index is a cumulative sum of the REWARD TOKEN per ltToken accrued
      */
-    function _updateRewardTokenBorrowIndex(address vToken, Exp memory marketBorrowIndex) internal {
-        RewardToken storage borrowState = rewardTokenBorrowState[vToken];
-        TimeBasedRewardToken storage borrowStateTimeBased = rewardTokenBorrowStateTimeBased[vToken];
+    function _updateRewardTokenBorrowIndex(address ltToken, Exp memory marketBorrowIndex) internal {
+        RewardToken storage borrowState = rewardTokenBorrowState[ltToken];
+        TimeBasedRewardToken storage borrowStateTimeBased = rewardTokenBorrowStateTimeBased[ltToken];
 
-        uint256 borrowSpeed = rewardTokenBorrowSpeeds[vToken];
+        uint256 borrowSpeed = rewardTokenBorrowSpeeds[ltToken];
         uint256 blockNumberOrTimestamp = getBlockNumberOrTimestamp();
 
         if (!isTimeBased) {
@@ -650,7 +650,7 @@ contract RewardsDistributor is
             (isTimeBased ? borrowStateTimeBased.timestamp : uint256(borrowState.block))
         );
         if (deltaBlocksOrTimestamp > 0 && borrowSpeed > 0) {
-            uint256 borrowAmount = div_(VToken(vToken).totalBorrows(), marketBorrowIndex);
+            uint256 borrowAmount = div_(LtToken(ltToken).totalBorrows(), marketBorrowIndex);
             uint256 accruedSinceUpdate = mul_(deltaBlocksOrTimestamp, borrowSpeed);
             Double memory ratio = borrowAmount > 0
                 ? fraction(accruedSinceUpdate, borrowAmount)
@@ -676,17 +676,17 @@ contract RewardsDistributor is
             }
         }
 
-        emit RewardTokenBorrowIndexUpdated(vToken, marketBorrowIndex);
+        emit RewardTokenBorrowIndexUpdated(ltToken, marketBorrowIndex);
     }
 
     /**
-     * @notice Initializes the market state for a specific vToken called when contract is block-based
-     * @param vToken The address of the vToken to be initialized
+     * @notice Initializes the market state for a specific ltToken called when contract is block-based
+     * @param ltToken The address of the ltToken to be initialized
      * @param blockNumber current block number
      */
-    function _initializeMarketBlockBased(address vToken, uint32 blockNumber) internal {
-        RewardToken storage supplyState = rewardTokenSupplyState[vToken];
-        RewardToken storage borrowState = rewardTokenBorrowState[vToken];
+    function _initializeMarketBlockBased(address ltToken, uint32 blockNumber) internal {
+        RewardToken storage supplyState = rewardTokenSupplyState[ltToken];
+        RewardToken storage borrowState = rewardTokenBorrowState[ltToken];
 
         /*
          * Update market state indices
@@ -708,13 +708,13 @@ contract RewardsDistributor is
     }
 
     /**
-     * @notice Initializes the market state for a specific vToken called when contract is time-based
-     * @param vToken The address of the vToken to be initialized
+     * @notice Initializes the market state for a specific ltToken called when contract is time-based
+     * @param ltToken The address of the ltToken to be initialized
      * @param blockTimestamp current block timestamp
      */
-    function _initializeMarketTimestampBased(address vToken, uint256 blockTimestamp) internal {
-        TimeBasedRewardToken storage supplyState = rewardTokenSupplyStateTimeBased[vToken];
-        TimeBasedRewardToken storage borrowState = rewardTokenBorrowStateTimeBased[vToken];
+    function _initializeMarketTimestampBased(address ltToken, uint256 blockTimestamp) internal {
+        TimeBasedRewardToken storage supplyState = rewardTokenSupplyStateTimeBased[ltToken];
+        TimeBasedRewardToken storage borrowState = rewardTokenBorrowStateTimeBased[ltToken];
 
         /*
          * Update market state indices
